@@ -60,3 +60,6 @@ See README.md. `npm run dev` starts the local preview, `npm test` runs tests, an
 - Publication requires the owner to configure DOCKERHUB_TOKEN in the dockerhub environment. No token was requested through chat or committed; no image has been pushed to Docker Hub and no Azure resources have been created.
 - Remote main initially contains only README.md; the initial application and Docker automation will be submitted together for review in a pull request.
 - Full setup and daily-use instructions: docs/docker-publication.md.
+- Opened PR #1: https://github.com/samauces2/subtrak/pull/1. GitHub Actions run 40998969433 passed the application and runtime-image validation; publication was correctly skipped for a PR.
+- actionlint and BuildKit Dockerfile checks passed. The local runtime image is approximately 26 MB (uncompressed image-size report).
+- Main branch protection was not changed: automatic approval review rejected enforcing new merge rules without explicit user authorization. The workflow still verifies a merged PR and the dockerhub environment still requires manual approval before publication. Optional branch protection remains pending the owner's explicit authorization.
