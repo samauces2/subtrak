@@ -58,3 +58,16 @@ En **Mis suscripciones → Pagos**, ingresa el importe y la fecha, y pulsa **Con
 
 Los respaldos nuevos incluyen pagos; los respaldos de versión 1 se abren con historial vacío. No se convierten cobros programados en pagos confirmados. Importar un respaldo sin pagos reemplaza también el historial existente después de la advertencia y confirmación.
 # subtrak
+
+## Docker y GitHub Actions
+
+La imagen usa Node solo para compilar y Nginx para servir la aplicación en el puerto `8080`.
+
+```sh
+docker build -t subtrak:local .
+bash scripts/smoke-container.sh subtrak:local
+```
+
+El workflow `.github/workflows/docker-image.yml` valida los PR hacia `main`. Tras un merge y tu aprobación manual en GitHub Actions, publica `samauces/subtrak:latest` y `samauces/subtrak:sha-<commit>` en Docker Hub, para AMD64 y ARM64.
+
+Antes de la primera publicación, configura `DOCKERHUB_TOKEN` en el entorno GitHub `dockerhub`. Consulta [la guía completa](docs/docker-publication.md) para el token, la aprobación, las reglas de rama y los comandos de ejecución. No hay despliegue a Azure en este flujo.

@@ -1,0 +1,19 @@
+# Only application/build inputs enter the image build context.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!tsconfig.json
+!vite.config.ts
+!index.html
+!src/
+!src/**
+!docker/
+!docker/nginx.conf
+
+# Keep secrets and local editor files out, even if placed inside src/.
+**/.env*
+**/*.pem
+**/*.key
+**/.DS_Store
