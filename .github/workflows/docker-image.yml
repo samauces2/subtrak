@@ -1,0 +1,153 @@
+name: Docker image
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-image-${{ github.ref }}
+  # Never interrupt an image push halfway through. PR checks can be superseded.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE_NAME: samauces/subtrak
+
+jobs:
+  validate:
+    name: Validate application and image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run business-logic tests
+        run: npm test
+
+      - name: Typecheck and build application
+        run: npm run build
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Build image for runtime checks (no publication)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          load: true
+          push: false
+          tags: subtrak:check
+          cache-from: type=gha,scope=subtrak
+          cache-to: type=gha,scope=subtrak,mode=max
+
+      - name: Check the running container
+        run: bash scripts/smoke-container.sh subtrak:check
+
+  merged-pr:
+    name: Confirm merged pull request
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+    steps:
+      # A direct push to main must not publish, even if branch rules were bypassed.
+      - name: Verify this commit came from a merged PR into main
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          merged=$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            --paginate --slurp | jq --arg sha "$GITHUB_SHA" --arg repo "$GITHUB_REPOSITORY" \
+            'any(.[][]; .merged_at != null and .merge_commit_sha == $sha and .base.ref == "main" and .base.repo.full_name == $repo)')
+          echo "publish=$merged" >> "$GITHUB_OUTPUT"
+          if [ "$merged" != "true" ]; then
+            echo '::notice::Publication skipped: this is not a merged pull request into main.'
+          fi
+
+  publish:
+    name: Publish to Docker Hub
+    needs: [validate, merged-pr]
+    if: needs.merged-pr.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Required reviewer configured in GitHub: Settings > Environments > dockerhub.
+    environment:
+      name: dockerhub
+      url: https://hub.docker.com/r/samauces/subtrak
+    steps:
+      - name: Checkout validated commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Check Docker Hub token is configured
+        env:
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo '::error::Configure the DOCKERHUB_TOKEN secret in the dockerhub environment.'
+            exit 1
+          fi
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME || 'samauces' }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and publish both architectures
+        id: image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.title=SubTrack
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=subtrak
+          cache-to: type=gha,scope=subtrak,mode=max
+          provenance: mode=min
+
+      - name: Summarize published image
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          {
+            echo '### Docker Hub image published'
+            echo "- Image: \`${IMAGE_NAME}:sha-${GITHUB_SHA}\`"
+            echo "- Alias: \`${IMAGE_NAME}:latest\`"
+            echo "- Digest: \`${IMAGE_DIGEST}\`"
+            echo '- Platforms: linux/amd64, linux/arm64'
+          } >> "$GITHUB_STEP_SUMMARY"
